@@ -7,7 +7,7 @@
 #
 #修改以下代码或者开启触发开关都好，要严格按格式对好,前面有多少空格也要看清楚
 #代码里有 name: 后面的内容随便改,冒号后面是有个空格的,如果修改固件名字就要考虑能不能显示出你想要的
-#
+
 
 name: Lede-OpenWrt 固件
 
@@ -45,6 +45,7 @@ env:
   DIY_OP_SH: diy-lede.sh
   SSH_ACTIONS: true
   UPLOAD_BIN_DIR: false
+  UPLOAD_CONFIG: true
   UPLOAD_FIRMWARE: true
   UPLOAD_COWTRANSFER: false
   UPLOAD_WETRANSFER: false
@@ -57,7 +58,7 @@ jobs:
     if: github.event.repository.owner.id == github.event.sender.id
 
     steps:
-    - name: 准备完毕
+    - name: 准备结束
       uses: actions/checkout@main
 
     - name: 开始安装编译所需系统
@@ -80,18 +81,18 @@ jobs:
         git clone --depth 1 $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-    - name: 加载diy-lede.sh跟feeds.conf.default设置
+    - name: 加载feeds跟自定义插件
       run: |
         [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
         chmod +x $DIY_OP_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_OP_SH
 
-    - name: 下载diy-lede.sh跟feeds.conf.default自定义软件
-      run: cd openwrt && ./scripts/feeds update -a
-
-    - name: 安装自定义软件
-      run: cd openwrt && ./scripts/feeds install -a
+    - name: 下载feeds跟安装自定义插件
+      run: |
+        cd openwrt
+        ./scripts/feeds update -a
+        ./scripts/feeds install -a
 
     - name: 加载diy.config设置
       run: |
@@ -119,7 +120,7 @@ jobs:
         make -j$(nproc) || make -j1 || make -j1 V=s
         echo "::set-output name=status::success"
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-        [ -s DEVICE_NAME ] && echo "::set-env name=DEVICE_NAME::_$(cat DEVICE_NAME)"
+        [ -s DEVICE_NAME ] && echo "::set-env name=DEVICE_NAME::$(cat DEVICE_NAME)"
         echo "::set-env name=FILE_DATE::$(date "+%Y-%m-%d %H.%M.%S")"
 
     - name: 检查github储存空间情况
@@ -130,15 +131,28 @@ jobs:
       uses: actions/upload-artifact@main
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
       with:
-        name: OpenWrt_bin${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
+        name: OpenWrt_bin_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
         path: openwrt/bin
+
+    - name: 提取config.buildinfo配置文件
+      id: config
+      run: |
+          rm -rf config && mkdir config
+          find openwrt/bin/targets/ -name "*config.buildinfo*" | xargs -i mv -f {} config
+          echo "::set-output name=status::success"
+    - name: 上传.config配置文件在github空间    
+      if: steps.config.outputs.status == 'success' && env.UPLOAD_CONFIG == 'true'
+      uses: actions/upload-artifact@main
+      with:
+        name: config.buildinfo_${{ env.FILE_DATE }}
+        path: ./config
 
     - name: 整理固件文件夹
       id: organizer
       run: |
         cd openwrt/bin/targets/*/*
         rm -rf packages && mkdir packages
-        find -name "*feeds.buildinfo*" | xargs -i mv -f {} packages
+        find -name "*.buildinfo*" | xargs -i mv -f {} packages
         find -name "*sha256sums*" | xargs -i mv -f {} packages
         rm -rf packages
         echo "::set-env name=FIRMWARE::$PWD"
@@ -146,21 +160,21 @@ jobs:
         
     - name: 上传固件在github空间
       uses: actions/upload-artifact@main
-      if: steps.organizer.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      if: steps.organizer.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
       with:
-        name: OpenWrt_firmware${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
+        name: OpenWrt_firmware_${{ env.DEVICE_NAME }}_${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
 
-    - name: 上传固件到cowtransfer网盘
+    - name: 上传固件到奶牛快传
       if: steps.organizer.outputs.status == 'success' && env.UPLOAD_COWTRANSFER == 'true' && !cancelled()
       run: |
         curl -fsSL git.io/file-transfer | sh
         ./transfer cow --block 2621440 -s -p 64 --no-progress ${FIRMWARE} 2>&1 | tee cowtransfer.log
-        echo "::warning file=cowtransfer.com::$(cat cowtransfer.log | grep https)"
+        echo "::warning file=↓↓无需注册直接下载↓↓奶牛快传下载地址↓↓::$(cat cowtransfer.log | grep https)"
 
-    - name: 上传固件到WeTransfer网盘
+    - name: 上传固件到WeTransfer
       if: steps.organizer.outputs.status == 'success' && env.UPLOAD_WETRANSFER == 'true' && !cancelled()
       run: |
         curl -fsSL git.io/file-transfer | sh
         ./transfer wet -s -p 16 --no-progress ${FIRMWARE} 2>&1 | tee wetransfer.log
-        echo "::warning file=wetransfer.com::$(cat wetransfer.log | grep https)"
+        echo "::warning file=↓↓无需注册直接下载↓↓wetransfer下载地址↓↓::$(cat wetransfer.log | grep https)"
